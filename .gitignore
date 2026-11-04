@@ -1,0 +1,8 @@
+/target
+/dist
+*.bmp
+*.log
+**/*.rs.bk
+*.pdb
+/.workbuddy
+.DS_Store

@@ -1,0 +1,11 @@
+# Normalise line endings: the sources are LF, and git should keep them that
+# way no matter what core.autocrlf says on a given Windows checkout.
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.png binary
+*.ico binary
+*.exe binary
+*.bmp binary

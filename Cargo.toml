@@ -1,0 +1,42 @@
+[package]
+name = "fxviewer"
+version = "0.2.12"
+edition = "2021"
+description = "FX-terminal style candlestick monitor for CPU, memory, disks, NICs and GPUs"
+license = "MIT"
+
+[dependencies]
+eframe = "0.29"
+sysinfo = "0.40"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# Windows-only sensors that sysinfo does not expose: the PDH counter set
+# "GPU Adapter Memory" (shared GPU memory, the same number Task Manager shows)
+# and optionally NVML for GPU temperature and power. Both are runtime-optional:
+# a missing counter set or DLL just means the card is not drawn.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Performance",
+    "Win32_System_LibraryLoader",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    # RegisterClassW / WNDCLASSW live under the Gdi module in windows-sys.
+    "Win32_Graphics_Gdi",
+] }
+
+# Build-time only: compresses the generated 256px icon into a PNG so the .ico
+# stays small. Never linked into the binary.
+[build-dependencies]
+miniz_oxide = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

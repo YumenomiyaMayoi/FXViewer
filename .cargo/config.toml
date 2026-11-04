@@ -1,0 +1,5 @@
+# Static CRT: the binary must run on a machine that has never seen Visual
+# Studio. Without this, the exe imports VCRUNTIME140.dll and dies on a clean
+# Windows install.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
