@@ -71,11 +71,46 @@ mod win {
         PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY,
         PDH_MORE_DATA,
     };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
 
     use super::{GpuReading, MemReading, VolumeInfo};
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Usable desktop area of the primary monitor — the screen minus the
+    /// taskbar — as `(x, y, width, height)` in points.
+    ///
+    /// A window larger than this cannot be shown whole: Windows clamps it to
+    /// the *screen*, not the work area, so whatever sits at the bottom (here:
+    /// the status bar) ends up under the taskbar. The app asks once at startup
+    /// so it opens at a size and position that actually fit.
+    pub fn work_area_points(ppp: f32) -> Option<(f32, f32, f32, f32)> {
+        let mut r = windows_sys::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                &mut r as *mut _ as *mut core::ffi::c_void,
+                0,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let ppp = if ppp > 0.0 { ppp } else { 1.0 };
+        Some((
+            r.left as f32 / ppp,
+            r.top as f32 / ppp,
+            (r.right - r.left) as f32 / ppp,
+            (r.bottom - r.top) as f32 / ppp,
+        ))
     }
 
     // ---------------------------------------------------------------- PDH ---
@@ -634,6 +669,11 @@ mod win {
 mod win {
     use super::{GpuReading, MemReading, VolumeInfo};
 
+    /// No work-area query outside Windows: the caller keeps the design size.
+    pub fn work_area_points(_ppp: f32) -> Option<(f32, f32, f32, f32)> {
+        None
+    }
+
     pub struct Sensors;
 
     impl Sensors {
@@ -649,4 +689,4 @@ mod win {
     }
 }
 
-pub use win::{volume_info, Sensors};
+pub use win::{volume_info, work_area_points, Sensors};

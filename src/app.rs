@@ -423,6 +423,9 @@ pub struct FxApp {
     /// The defaults depend on the window size, which is only known after the
     /// first frame.
     layout_init: bool,
+    /// 0 = not fitted yet, 1 = resize requested (waiting for it to land),
+    /// 2 = done. See `fit_to_work_area`.
+    fit_state: u8,
     /// True while the window is borderless-fullscreen (F11).
     fullscreen: bool,
     /// Messages from the tray thread.
@@ -481,6 +484,7 @@ impl FxApp {
             procs_w: 214.0,
             strip_h: 160.0,
             layout_init: false,
+            fit_state: 0,
             fullscreen: false,
             tray_rx,
             tray_ready: false,
@@ -605,6 +609,67 @@ impl FxApp {
             }
         }
         enabled && resp.clicked()
+    }
+
+    /// The window opens at a design size that assumes a roomy screen. On a
+    /// smaller monitor — or a laptop at 150 %, where 1240x780 points is
+    /// 1860x1170 physical pixels — that request does not fit, and Windows
+    /// clamps the window to the *screen* rather than the work area, which
+    /// leaves the status bar sitting under the taskbar with no way to see it.
+    ///
+    /// So the first frame measures the work area (taskbar already excluded)
+    /// and asks for a size that fits, with a small margin. After that the
+    /// geometry belongs to the user: a later drag is not undone.
+    fn fit_to_work_area(&mut self, ctx: &egui::Context) {
+        const MARGIN: f32 = 12.0;
+        const FITTING: u8 = 1;
+        const DONE: u8 = 2;
+
+        match self.fit_state {
+            0 => {
+                self.fit_state = DONE;
+                let Some((ax, ay, aw, ah)) =
+                    crate::win_sensors::work_area_points(ctx.pixels_per_point())
+                else {
+                    return;
+                };
+                let size = ctx.screen_rect().size();
+                let max = vec2(aw - MARGIN * 2.0, ah - MARGIN * 2.0);
+                let fitted = vec2(size.x.min(max.x), size.y.min(max.y));
+                let resized = (size.x - fitted.x).abs() > 0.5 || (size.y - fitted.y).abs() > 0.5;
+
+                // Shrinking alone is not enough: the window may have opened
+                // low on the screen, in which case its bottom still hangs off
+                // the work area. Clamp the top-left corner to keep the whole
+                // frame inside.
+                let outer = ctx.input(|i| i.viewport().outer_rect);
+                let cur = outer
+                    .map(|r| r.min)
+                    .unwrap_or(pos2(ax + MARGIN, ay + MARGIN));
+                let lo = pos2(ax + MARGIN, ay + MARGIN);
+                let hi = pos2(
+                    (ax + aw - fitted.x).max(lo.x),
+                    (ay + ah - fitted.y).max(lo.y),
+                );
+                let target = pos2(cur.x.clamp(lo.x, hi.x), cur.y.clamp(lo.y, hi.y));
+                let moved = (cur - target).length() > 0.5;
+
+                if resized || moved {
+                    self.fit_state = FITTING;
+                    if resized {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(fitted));
+                        // Panel defaults are seeded from the window size; seed
+                        // them against the size the window is about to have.
+                        self.layout_init = false;
+                    }
+                    if moved {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target));
+                    }
+                }
+            }
+            FITTING => self.fit_state = DONE,
+            _ => {}
+        }
     }
 
     fn header(&mut self, ctx: &egui::Context) {
@@ -931,8 +996,9 @@ impl FxApp {
         let mut scroll = self.watch_scroll;
 
         // Seeded here because the window size is only known once a frame has
-        // been laid out.
-        if !self.layout_init {
+        // been laid out — and not while the opening window is still being
+        // fitted, or the defaults would be seeded from the oversized one.
+        if !self.layout_init && self.fit_state != 1 {
             self.watch_w = if narrow { 172.0 } else { 198.0 };
             self.procs_w = if narrow { 184.0 } else { 214.0 };
             // A short window gets no sensor strip by default; the tab at the
@@ -1790,6 +1856,11 @@ impl FxApp {
 
 impl eframe::App for FxApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Fit the opening window to the monitor before anything is laid out:
+        // the design size assumes a roomy screen, and a window that does not
+        // fit ends up with its bottom row behind the taskbar.
+        self.fit_to_work_area(ctx);
+
         // Tray thread: readiness first, then clicks from the icon.
         while let Ok(msg) = self.tray_rx.try_recv() {
             match msg {
@@ -1992,6 +2063,7 @@ impl eframe::App for FxApp {
         self.status_bar(ctx);
         self.watchlist(ctx);
         self.processes(ctx);
+
         self.chart(ctx);
 
         if self
