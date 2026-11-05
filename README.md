@@ -278,6 +278,20 @@ maps to winit's `drag_resize_window` and the same native modal loop. A
 hairline outline drawn in a `Foreground` layer replaces the frame the OS
 used to paint, so the window still separates from a dark desktop.
 
+Windows 10 does not always honour that calculation. On the builds where it
+fails — a 1366×768 laptop among the reports — the compositor still reserves
+the frame for the window surface, so the whole UI is drawn one caption lower
+and one border further right: black bands along the top and left edge, and a
+pointer that no longer matches what it is over. The cure is winit 0.27's
+behaviour: strip `WS_CAPTION | WS_BORDER` (keeping `WS_THICKFRAME`, so edge
+resizing and Aero snap survive), force a frame recalculation, and repeat it
+every frame, because winit puts the styles back on maximize and restore. That
+is `src/win_frame.rs`, and it is deliberately gated to Windows 10 and older —
+Windows 11 draws an undecorated window correctly, and the strip costs
+something there: Windows sizes a caption-less maximize to the whole monitor,
+taskbar included. `trim_maximized` parks such a window back on the work area,
+the way a normal maximized window sits.
+
 While fullscreen, the bar keeps rendering: drag, double-click, maximize and
 minimize go dormant (they would fight the viewport state), close still
 closes, and the resize borders disappear.
@@ -562,6 +576,7 @@ src/
 ├── series.rs     OHLC bucketing and moving averages (+ tests)
 ├── sampler.rs    background sampling thread
 ├── win_sensors.rs Windows-only PDH / ioctl / NVML sensors
+├── win_frame.rs  keeps the undecorated window borderless on Windows 10
 ├── tray.rs       tray icon while fullscreen
 ├── icon.rs       runtime window icon
 ├── icon_art.rs   icon pixels, shared with build.rs

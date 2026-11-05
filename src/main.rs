@@ -9,6 +9,7 @@ mod series;
 mod theme;
 mod tray;
 mod util;
+mod win_frame;
 mod win_sensors;
 
 use eframe::egui;

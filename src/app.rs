@@ -426,6 +426,9 @@ pub struct FxApp {
     /// 0 = not fitted yet, 1 = resize requested (waiting for it to land),
     /// 2 = done. See `fit_to_work_area`.
     fit_state: u8,
+    /// Undoes the caption/border winit puts back on an undecorated window
+    /// where the compositor still reserves it. Dormant elsewhere.
+    frame_fix: crate::win_frame::FrameFix,
     /// True while the window is borderless-fullscreen (F11).
     fullscreen: bool,
     /// Messages from the tray thread.
@@ -485,6 +488,7 @@ impl FxApp {
             strip_h: 160.0,
             layout_init: false,
             fit_state: 0,
+            frame_fix: crate::win_frame::FrameFix::new(),
             fullscreen: false,
             tray_rx,
             tray_ready: false,
@@ -1860,6 +1864,10 @@ impl eframe::App for FxApp {
         // the design size assumes a roomy screen, and a window that does not
         // fit ends up with its bottom row behind the taskbar.
         self.fit_to_work_area(ctx);
+
+        // winit re-adds WS_CAPTION | WS_BORDER after flag changes; where the
+        // compositor honours that frame, the whole UI is drawn offset by it.
+        self.frame_fix.tick();
 
         // Tray thread: readiness first, then clicks from the icon.
         while let Ok(msg) = self.tray_rx.try_recv() {
