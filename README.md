@@ -282,15 +282,21 @@ Windows 10 does not always honour that calculation. On the builds where it
 fails — a 1366×768 laptop among the reports — the compositor still reserves
 the frame for the window surface, so the whole UI is drawn one caption lower
 and one border further right: black bands along the top and left edge, and a
-pointer that no longer matches what it is over. The cure is winit 0.27's
-behaviour: strip `WS_CAPTION | WS_BORDER` (keeping `WS_THICKFRAME`, so edge
-resizing and Aero snap survive), force a frame recalculation, and repeat it
-every frame, because winit puts the styles back on maximize and restore. That
-is `src/win_frame.rs`, and it is deliberately gated to Windows 10 and older —
-Windows 11 draws an undecorated window correctly, and the strip costs
-something there: Windows sizes a caption-less maximize to the whole monitor,
-taskbar included. `trim_maximized` parks such a window back on the work area,
-the way a normal maximized window sits.
+pointer that no longer matches what it is over. Stripping `WS_CAPTION | WS_BORDER`
+takes the caption out of that frame, which is the bulk of it; what is left is
+the resize frame Windows keeps for a *sizable* window, a thin strip along the
+left and top. So on Windows 10 the window loses `WS_THICKFRAME` as well: with
+no frame at all there is nothing left for the compositor to reserve, and
+`WM_NCCALCSIZE` is answered here rather than left to `DefWindowProc`. The
+modal resize loop goes with the style, so the same eight edge `Area`s move and
+size the window themselves from the pointer position. Dragging the bar still
+goes through the system move loop.
+
+That is `src/win_frame.rs`, and it is deliberately gated to Windows 10 and
+older — Windows 11 draws an undecorated window correctly, and a caption-less
+maximize there is sized to the whole monitor, taskbar included.
+`trim_maximized` parks such a window back on the work area, the way a normal
+maximized window sits.
 
 While fullscreen, the bar keeps rendering: drag, double-click, maximize and
 minimize go dormant (they would fight the viewport state), close still
@@ -663,19 +669,19 @@ a font subset or loading one from the system at runtime.
 cargo build --release
 mkdir dist
 copy /y target\release\fxviewer.exe dist\FXViewer.exe
-powershell -NoProfile -Command "Compress-Archive -LiteralPath 'dist\FXViewer.exe' -DestinationPath 'dist\FXViewer-0.2.12-win64.zip' -Force"
+powershell -NoProfile -Command "Compress-Archive -LiteralPath 'dist\FXViewer.exe' -DestinationPath 'dist\FXViewer-0.2.13-win64.zip' -Force"
 ```
 
 ```bat
 dist\FXViewer.exe              <- single file, send this
-dist\FXViewer-0.2.12-win64.zip <- the same exe, zipped for a release upload
+dist\FXViewer-0.2.13-win64.zip <- the same exe, zipped for a release upload
 ```
 
 `FXViewer.exe` **is** the whole program: 3.3 MB, no side files, no config, no
 installer. Verified by copying it alone into an empty directory — and into a
 path with spaces and CJK characters — and launching it there.
 
-`FXViewer-0.2.12-win64.zip` (1.7 MB) is just the same exe in an archive, ready to
+`FXViewer-0.2.13-win64.zip` (1.7 MB) is just the same exe in an archive, ready to
 attach to a GitHub Release. Binaries are not committed to the repository:
 `dist/` is ignored, so git carries only source and build files.
 
@@ -688,7 +694,7 @@ generic sheet — the runtime `with_icon()` call only affects the window, not th
 file.
 
 The same resource carries `ProductName` / `FileVersion`, so File Properties and
-Task Manager show "FXViewer 0.2.12.0" instead of a bare filename.
+Task Manager show "FXViewer 0.2.13.0" instead of a bare filename.
 
 The step is optional: on non-Windows hosts, or if `rc.exe` is missing, the build
 prints a warning and continues without resources.

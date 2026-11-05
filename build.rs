@@ -224,12 +224,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "FXViewer"
       VALUE "FileDescription", "FXViewer - resource terminal"
-      VALUE "FileVersion", "0.2.12.0"
+      VALUE "FileVersion", "0.2.13.0"
       VALUE "InternalName", "FXViewer"
       VALUE "LegalCopyright", "MIT licensed"
       VALUE "OriginalFilename", "FXViewer.exe"
       VALUE "ProductName", "FXViewer"
-      VALUE "ProductVersion", "0.2.12"
+      VALUE "ProductVersion", "0.2.13"
     END
   END
   BLOCK "VarFileInfo"

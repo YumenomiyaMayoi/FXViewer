@@ -1,6 +1,6 @@
 [package]
 name = "fxviewer"
-version = "0.2.12"
+version = "0.2.13"
 edition = "2021"
 description = "FX-terminal style candlestick monitor for CPU, memory, disks, NICs and GPUs"
 license = "MIT"
@@ -25,6 +25,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    # GetAsyncKeyState: the edge drag ends when the button comes up.
+    "Win32_UI_Input_KeyboardAndMouse",
     # RegisterClassW / WNDCLASSW live under the Gdi module in windows-sys.
     "Win32_Graphics_Gdi",
 ] }

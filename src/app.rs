@@ -1919,7 +1919,14 @@ impl eframe::App for FxApp {
                     .show(ctx, |ui| {
                         let (_, resp) = ui.allocate_exact_size(zrect.size(), egui::Sense::drag());
                         if resp.drag_started_by(egui::PointerButton::Primary) {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(*dir));
+                            if self.frame_fix.manual_resize() {
+                                self.frame_fix.begin_resize(*dir, ctx.pixels_per_point());
+                            } else {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(*dir));
+                            }
+                        }
+                        if resp.drag_stopped_by(egui::PointerButton::Primary) {
+                            self.frame_fix.end_resize();
                         }
                         // Only while the pointer is actually in *this* zone:
                         // an unconditional set would let the last zone's
