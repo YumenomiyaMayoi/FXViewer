@@ -706,6 +706,7 @@ impl FxApp {
                 // of this one, so they win wherever they are.
                 let bar = ui.interact(rect, egui::Id::new("fx_titlebar"), egui::Sense::click_and_drag());
                 if !self.fullscreen && bar.drag_started_by(egui::PointerButton::Primary) {
+                    self.frame_fix.begin_move();
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
                 if !self.fullscreen && bar.double_clicked_by(egui::PointerButton::Primary) {
@@ -1867,7 +1868,16 @@ impl eframe::App for FxApp {
 
         // winit re-adds WS_CAPTION | WS_BORDER after flag changes; where the
         // compositor honours that frame, the whole UI is drawn offset by it.
-        self.frame_fix.tick();
+        // A window with no frame at all also gets no snap from the shell, so a
+        // drag that ends on a screen edge is carried out here.
+        if let Some(snap) = self.frame_fix.tick() {
+            match snap {
+                crate::win_frame::Snap::Maximize => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true))
+                }
+                crate::win_frame::Snap::Rect(rect) => self.frame_fix.set_rect(rect),
+            }
+        }
 
         // Tray thread: readiness first, then clicks from the icon.
         while let Ok(msg) = self.tray_rx.try_recv() {

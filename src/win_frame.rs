@@ -18,7 +18,10 @@
 //! Dropping `WS_THICKFRAME` as well leaves no frame at all, so there is nothing
 //! left to reserve. The window is then resized from here instead
 //! (`begin_resize`), and `WM_NCCALCSIZE` is answered directly so no code path
-//! can hand the client rect back to `DefWindowProc`.
+//! can hand the client rect back to `DefWindowProc`. The shell also stops
+//! treating the window as sizable: dragging the bar still moves it, but a drag
+//! that ends on a work-area edge, and the restore a drag from a maximized bar
+//! starts with, are carried out here (`tick`).
 //!
 //! winit puts the styles back whenever it changes the window flags (maximize,
 //! restore), hence the per-frame guard.
@@ -39,6 +42,16 @@ pub struct FrameFix {
     hooked: bool,
     /// The edge being dragged with the pointer, while `active`.
     resize: Option<Resize>,
+    /// The window rect a title-bar drag started from, until the button is up.
+    moving: Option<[i32; 4]>,
+}
+
+/// What the shell does with a window dragged against a screen edge, which a
+/// window without a resize frame has to do itself.
+#[derive(Clone, Copy)]
+pub enum Snap {
+    Maximize,
+    Rect([i32; 4]),
 }
 
 /// One edge-drag in progress: the pointer and the window rect it started from,
@@ -61,6 +74,7 @@ impl FrameFix {
             active: hwnd != 0 && !imp::is_windows_11_or_later(),
             hooked: false,
             resize: None,
+            moving: None,
         }
     }
 
@@ -94,18 +108,44 @@ impl FrameFix {
         self.resize = None;
     }
 
+    /// Called when a title-bar drag is handed to the system move loop, so the
+    /// end of that drag can tell a move from a click on the bar. A maximized
+    /// window is restored first, under the pointer, the way the shell does it
+    /// for a window with a frame.
+    pub fn begin_move(&mut self) {
+        if !self.active || self.hwnd == 0 {
+            return;
+        }
+        let Some(mut rect) = imp::window_rect(self.hwnd) else {
+            return;
+        };
+        if imp::is_maximized(self.hwnd) {
+            rect = imp::restore_under_cursor(self.hwnd, rect);
+        }
+        self.moving = Some(rect);
+    }
+
+    /// Applies a snap rect, on the systems where the shell will not.
+    pub fn set_rect(&self, rect: [i32; 4]) {
+        if self.active && self.hwnd != 0 {
+            imp::set_rect(self.hwnd, rect);
+        }
+    }
+
     /// Cheap enough to call every frame: one style read while active, nothing
-    /// at all on Windows 11.
-    pub fn tick(&mut self) {
+    /// at all on Windows 11. Returns the snap the shell would have applied to a
+    /// drag that ended on a screen edge, where the window has no frame to make
+    /// the shell do it.
+    pub fn tick(&mut self) -> Option<Snap> {
         if self.hwnd == 0 {
             self.hwnd = imp::find();
             if self.hwnd == 0 {
-                return;
+                return None;
             }
             self.active = !imp::is_windows_11_or_later();
         }
         if !self.active {
-            return;
+            return None;
         }
         imp::strip(self.hwnd);
         if !self.hooked {
@@ -113,6 +153,20 @@ impl FrameFix {
         }
         imp::trim_maximized(self.hwnd);
         self.drag_tick();
+
+        // The move loop returns when the button comes up; a bar that was only
+        // clicked has not moved, and must not snap.
+        let start = self.moving?;
+        if !imp::primary_button_up() {
+            return None;
+        }
+        self.moving = None;
+        let now = imp::window_rect(self.hwnd)?;
+        let moved = (now[0] - start[0]).abs() > 8 || (now[1] - start[1]).abs() > 8;
+        if !moved {
+            return None;
+        }
+        imp::snap_target()
     }
 
     /// Applies the edge drag that is in progress, if any: the pointer is in
@@ -168,15 +222,20 @@ impl FrameFix {
 mod imp {
     use std::sync::atomic::{AtomicIsize, Ordering};
 
+    use super::Snap;
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HMONITOR, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST,
+    };
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, FindWindowW, GetCursorPos, GetWindowLongW, GetWindowRect, IsZoomed,
-        SetWindowLongPtrW, SetWindowLongW, SetWindowPos, SystemParametersInfoW, GWLP_WNDPROC,
-        GWL_STYLE, NCCALCSIZE_PARAMS, SPI_GETWORKAREA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_NCCALCSIZE, WS_BORDER, WS_CAPTION,
-        WS_THICKFRAME,
+        SetWindowLongPtrW, SetWindowLongW, SetWindowPos, ShowWindow, SystemParametersInfoW,
+        GWLP_WNDPROC, GWL_STYLE, NCCALCSIZE_PARAMS, SPI_GETWORKAREA, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_RESTORE, WM_NCCALCSIZE,
+        WS_BORDER, WS_CAPTION, WS_THICKFRAME,
     };
 
     /// The shape of a window procedure, for the call back into winit's own.
@@ -250,14 +309,14 @@ mod imp {
                 // untouched, except on a maximize, where it would cover the
                 // taskbar.
                 if lparam != 0 && IsZoomed(hwnd) != 0 {
-                    if let Some(wa) = work_area() {
+                    if let Some(wa) = work_area(hwnd) {
                         *(lparam as *mut RECT) = wa;
                     }
                 }
                 return 0;
             }
             if IsZoomed(hwnd) != 0 {
-                if let Some(wa) = work_area() {
+                if let Some(wa) = work_area(hwnd) {
                     let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
                     params.rgrc[0] = wa;
                 }
@@ -272,7 +331,32 @@ mod imp {
         CallWindowProcW(Some(prev), hwnd, msg, wparam, lparam)
     }
 
-    fn work_area() -> Option<RECT> {
+    fn monitor_work_area(monitor: HMONITOR) -> Option<RECT> {
+        if monitor.is_null() {
+            return None;
+        }
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            return None;
+        }
+        Some(info.rcWork)
+    }
+
+    /// Work area of the monitor the window sits on, so a maximize and a snap
+    /// land on the right screen.
+    fn work_area(hwnd: HWND) -> Option<RECT> {
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        monitor_work_area(monitor).or_else(primary_work_area)
+    }
+
+    fn work_area_at(x: i32, y: i32) -> Option<RECT> {
+        let point = POINT { x, y };
+        let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
+        monitor_work_area(monitor).or_else(primary_work_area)
+    }
+
+    fn primary_work_area() -> Option<RECT> {
         let mut wa = RECT {
             left: 0,
             top: 0,
@@ -301,6 +385,12 @@ mod imp {
             if GetCursorPos(&mut p) == 0 {
                 return None;
             }
+            Some(((p.x, p.y), window_rect(hwnd)?))
+        }
+    }
+
+    pub fn window_rect(hwnd: isize) -> Option<[i32; 4]> {
+        unsafe {
             let mut r = RECT {
                 left: 0,
                 top: 0,
@@ -310,7 +400,68 @@ mod imp {
             if GetWindowRect(hwnd as HWND, &mut r) == 0 {
                 return None;
             }
-            Some(((p.x, p.y), [r.left, r.top, r.right, r.bottom]))
+            Some([r.left, r.top, r.right, r.bottom])
+        }
+    }
+
+    /// Un-maximizes the window and puts it under the pointer, keeping the grab
+    /// point at the same fraction of the width the way the shell does. Returns
+    /// the rect the window ends up with.
+    pub fn restore_under_cursor(hwnd: isize, max: [i32; 4]) -> [i32; 4] {
+        unsafe {
+            let mut p = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut p) == 0 {
+                return max;
+            }
+            let width = (max[2] - max[0]).max(1);
+            let frac = ((p.x - max[0]) as f32 / width as f32).clamp(0.0, 1.0);
+            let grab_y = (p.y - max[1]).max(8);
+            ShowWindow(hwnd as HWND, SW_RESTORE);
+            let restored = window_rect(hwnd).unwrap_or(max);
+            let (mut w, mut h) = (restored[2] - restored[0], restored[3] - restored[1]);
+            if w >= width - 8 && h >= (max[3] - max[1]) - 8 {
+                // Nothing remembered to restore to: three quarters of the work
+                // area, which is what a first maximize-restore looks like.
+                let wa = work_area(hwnd as HWND).unwrap_or(RECT {
+                    left: 0,
+                    top: 0,
+                    right: max[2],
+                    bottom: max[3],
+                });
+                w = (wa.right - wa.left) * 3 / 4;
+                h = (wa.bottom - wa.top) * 3 / 4;
+            }
+            let left = p.x - (frac * w as f32) as i32;
+            let top = p.y - grab_y;
+            let rect = [left, top, left + w, top + h];
+            set_rect(hwnd, rect);
+            rect
+        }
+    }
+
+    /// The rect the shell would snap to with the pointer where it is: half the
+    /// work area along one edge, a quarter in a corner, a maximize at the top.
+    pub fn snap_target() -> Option<Snap> {
+        unsafe {
+            let mut p = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut p) == 0 {
+                return None;
+            }
+            let wa = work_area_at(p.x, p.y)?;
+            const EDGE: i32 = 12;
+            let (left, right) = (p.x <= wa.left + EDGE, p.x >= wa.right - EDGE);
+            let top = p.y <= wa.top + EDGE;
+            let w = (wa.right - wa.left) / 2;
+            let h = (wa.bottom - wa.top) / 2;
+            let rect = |l: i32, t: i32, r: i32, b: i32| Some(Snap::Rect([l, t, r, b]));
+            match (top, left, right) {
+                (true, true, _) => rect(wa.left, wa.top, wa.left + w, wa.top + h),
+                (true, _, true) => rect(wa.right - w, wa.top, wa.right, wa.top + h),
+                (true, _, _) => Some(Snap::Maximize),
+                (_, true, _) => rect(wa.left, wa.top, wa.left + w, wa.bottom),
+                (_, _, true) => rect(wa.right - w, wa.top, wa.right, wa.bottom),
+                _ => None,
+            }
         }
     }
 
@@ -342,7 +493,7 @@ mod imp {
             if IsZoomed(hwnd) == 0 {
                 return;
             }
-            let Some(wa) = work_area() else { return };
+            let Some(wa) = work_area(hwnd) else { return };
             let mut wr = RECT {
                 left: 0,
                 top: 0,
@@ -427,6 +578,15 @@ mod imp {
     }
     pub fn cursor_and_rect(_hwnd: isize) -> Option<((i32, i32), [i32; 4])> {
         None
+    }
+    pub fn window_rect(_hwnd: isize) -> Option<[i32; 4]> {
+        None
+    }
+    pub fn snap_target() -> Option<Snap> {
+        None
+    }
+    pub fn restore_under_cursor(_hwnd: isize, max: [i32; 4]) -> [i32; 4] {
+        max
     }
     pub fn set_rect(_hwnd: isize, _rect: [i32; 4]) {}
     pub fn primary_button_up() -> bool {

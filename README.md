@@ -290,7 +290,11 @@ no frame at all there is nothing left for the compositor to reserve, and
 `WM_NCCALCSIZE` is answered here rather than left to `DefWindowProc`. The
 modal resize loop goes with the style, so the same eight edge `Area`s move and
 size the window themselves from the pointer position. Dragging the bar still
-goes through the system move loop.
+goes through the system move loop, but the shell no longer snaps a window it
+does not consider sizable: a drag that ends against the work-area edge is
+turned into a maximize, a half or a quarter here, and a drag that starts on a
+maximized bar restores the window under the pointer first, the way the shell
+does it.
 
 That is `src/win_frame.rs`, and it is deliberately gated to Windows 10 and
 older — Windows 11 draws an undecorated window correctly, and a caption-less
